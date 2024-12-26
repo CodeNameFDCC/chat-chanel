@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Room</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        input,
+        button {
+            padding: 8px;
+            margin: 5px;
+        }
+
+        button {
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        .room-list {
+            margin: 20px 0;
+        }
+
+        .room-item {
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 5px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .player-list {
+            margin: 20px 0;
+        }
+
+        .player-item {
+            padding: 10px;
+            margin: 5px 0;
+            background-color: #f9f9f9;
+        }
+
+        .kick-button {
+            background-color: #ff4444;
+        }
+
+        .kick-button:hover {
+            background-color: #cc0000;
+        }
+
+        .system-message {
+            color: #666;
+            font-style: italic;
+            margin: 5px 0;
+        }
+
+        #chatArea {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 10px 0;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- 로비 화면 -->
+        <div id="lobbyView">
+            <div class="header">
+                <h2>게임 로비</h2>
+                <div id="userInfo"></div>
+            </div>
+            <div>
+                <input type="text" id="roomName" placeholder="방 이름을 입력하세요">
+                <button onclick="createRoom()">방 만들기</button>
+            </div>
+            <div class="room-list" id="roomList">
+                <h3>방 목록</h3>
+                <!-- 방 목록이 여기에 동적으로 추가됨 -->
+            </div>
+        </div>
+
+        <!-- 게임 방 화면 -->
+        <div id="gameRoomView" class="hidden">
+            <div class="header">
+                <h2 id="currentRoomName"></h2>
+                <button onclick="leaveRoom()">방 나가기</button>
+            </div>
+            <div class="player-list" id="playerList">
+                <h3>참가자 목록</h3>
+                <!-- 플레이어 목록이 여기에 동적으로 추가됨 -->
+            </div>
+            <div id="chatArea">
+                <!-- 시스템 메시지가 여기에 표시됨 -->
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // 소켓 연결 및 전역 변수
+        const socket = io();
+        let currentRoom = null;
+        let isHost = false;
+        let nickname = null;
+
+        // 초기화 함수
+        function init() {
+            // 닉네임 입력 받기
+            while (!nickname) {
+                nickname = prompt('닉네임을 입력하세요:');
+                if (!nickname) {
+                    alert('닉네임을 반드시 입력해야 합니다.');
+                }
+            }
+
+            // 닉네임 서버에 전송
+            socket.emit('setNickname', nickname);
+            document.getElementById('userInfo').textContent = `접속자: ${nickname}`;
+
+            // 초기 방 목록 요청
+            socket.emit('getRoomList');
+
+            // 초기 화면 설정
+            showLobby();
+        }
+
+        // 화면 전환 함수
+        function showLobby() {
+            document.getElementById('lobbyView').classList.remove('hidden');
+            document.getElementById('gameRoomView').classList.add('hidden');
+        }
+
+        function showGameRoom() {
+            document.getElementById('lobbyView').classList.add('hidden');
+            document.getElementById('gameRoomView').classList.remove('hidden');
+        }
+
+        // 방 관련 함수들
+        function createRoom() {
+            const roomName = document.getElementById('roomName').value.trim();
+            if (roomName) {
+                socket.emit('createRoom', roomName);
+            } else {
+                alert('방 이름을 입력하세요.');
+            }
+        }
+        // 방 참가 함수
+        function joinRoom(roomName) {
+            socket.emit('joinRoom', roomName);
+            // 방에 참가한 후 방 목록을 요청
+            socket.emit('getRoomList');
+        }
+
+        function leaveRoom() {
+            if (currentRoom) {
+                socket.emit('leaveRoom', currentRoom);
+                currentRoom = null;
+                isHost = false;
+                showLobby();
+            }
+        }
+
+        function kickPlayer(playerId) {
+            if (isHost && currentRoom) {
+                socket.emit('kickPlayer', {
+                    roomName: currentRoom,
+                    playerId: playerId
+                });
+            }
+        }
+
+        // 소켓 이벤트 리스너
+        socket.on('roomList', (rooms) => {
+            const roomList = document.getElementById('roomList');
+            roomList.innerHTML = '<h3>방 목록</h3>';
+
+            if (rooms.length === 0) {
+                roomList.innerHTML += '<div class="room-item">생성된 방이 없습니다.</div>';
+                return;
+            }
+
+            rooms.forEach(room => {
+                const roomElement = document.createElement('div');
+                roomElement.className = 'room-item';
+                roomElement.innerHTML = `
+                    <span>${room}</span>
+                    <button onclick="joinRoom('${room}')">참가</button>
+                `;
+                roomList.appendChild(roomElement);
+            });
+        });
+
+        socket.on('roomCreated', ({ roomName, isHost: host }) => {
+            currentRoom = roomName;
+            isHost = host;
+            document.getElementById('currentRoomName').textContent =
+                `${roomName} ${isHost ? '(방장)' : ''}`;
+            showGameRoom();
+        });
+
+        socket.on('joinedRoom', ({ roomName, isHost: host }) => {
+            currentRoom = roomName;
+            isHost = host;
+            document.getElementById('currentRoomName').textContent =
+                `${roomName} ${isHost ? '(방장)' : ''}`;
+            showGameRoom();
+            // 방 목록 요청 (방에 참가할 때마다 현재 방 목록을 요청)
+            socket.emit('getRoomList');
+        });
+
+        socket.on('playerList', ({ players }) => {
+            const playerList = document.getElementById('playerList');
+            playerList.innerHTML = '<h3>참가자 목록</h3>';
+
+            players.forEach(player => {
+                const playerElement = document.createElement('div');
+                playerElement.className = 'player-item';
+                playerElement.innerHTML = `
+                    <span>${player.name} ${player.isHost ? '(방장)' : ''}</span>
+                    ${isHost && player.id !== socket.id ?
+                        `<button class="kick-button" onclick="kickPlayer('${player.id}')">강퇴</button>`
+                        : ''}
+                `;
+                playerList.appendChild(playerElement);
+            });
+        });
+
+        socket.on('hostChanged', (newHost) => {
+            isHost = (newHost === socket.id);
+            if (isHost) {
+                alert('당신이 새로운 방장이 되었습니다!');
+            }
+            document.getElementById('currentRoomName').textContent =
+                `${currentRoom} ${isHost ? '(방장)' : ''}`;
+        });
+
+        socket.on('kicked', (roomName) => {
+            alert('방장에 의해 강퇴되었습니다.');
+            currentRoom = null;
+            isHost = false;
+            showLobby();
+        });
+
+        socket.on('systemMessage', (message) => {
+            const chatArea = document.getElementById('chatArea');
+            const messageElement = document.createElement('div');
+            messageElement.className = 'system-message';
+            messageElement.textContent = message;
+            chatArea.appendChild(messageElement);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        });
+
+        socket.on('error', (message) => {
+            alert(message);
+        });
+
+        // 페이지 종료 시 처리
+        window.addEventListener('beforeunload', () => {
+            if (currentRoom) {
+                socket.emit('leaveRoom', currentRoom);
+            }
+        });
+
+        // 페이지 로드 시 초기화
+        window.addEventListener('load', init);
+    </script>
+</body>
+
+</html>
